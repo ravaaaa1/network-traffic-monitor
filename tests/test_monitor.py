@@ -61,6 +61,9 @@ class MonitorTests(unittest.TestCase):
             path.write_text(header + "2026-11-16T13:00:00,invalid,192.168.1.8,https,443,120,IT\n")
             with self.assertRaisesRegex(ValueError, "№2"):
                 list(read_packets(path, ZoneInfo("UTC")))
+            path.write_text("invalid,header\n")
+            with self.assertRaisesRegex(ValueError, "обязательные столбцы"):
+                list(read_packets(path, ZoneInfo("UTC")))
 
 
 class AuditTests(unittest.TestCase):
@@ -90,6 +93,24 @@ class AuditTests(unittest.TestCase):
 
 
 class IntegrationTests(unittest.TestCase):
+    def test_incomplete_telegram_config_does_not_prevent_slack(self):
+        settings = {"TELEGRAM_BOT_TOKEN": "1:token", "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/a/b/c"}
+        report = {"packets": 4, "incidents": [{
+            "type": "SUSPECTED_DDOS", "destination": "192.168.1.1", "peak_pps": 2,
+            "duration_seconds": 2, "window_start": "2026-11-16T00:00:00+00:00",
+            "top_sources": ["203.0.113.1"],
+        }]}
+        with (
+            TemporaryDirectory() as folder,
+            patch.dict("os.environ", settings, clear=True),
+            patch("traffic_monitor.__main__.Slack") as slack,
+        ):
+            journal = AuditJournal(Path(folder) / "audit.sqlite", KEY)
+            statuses = deliver(report, journal, "run")
+            self.assertEqual([(x["provider"], x["outcome"]) for x in statuses],
+                             [("telegram", "error"), ("slack", "ok")])
+            slack.return_value.send.assert_called_once()
+
     def test_messaging_adapters(self):
         telegram = Mock(return_value={"ok": True})
         Telegram("1:token", "-101", telegram).send("Alert")

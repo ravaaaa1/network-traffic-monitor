@@ -9,6 +9,11 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 
+PACKET_COLUMNS = {
+    "timestamp", "source_ip", "destination_ip", "protocol", "port", "size_bytes", "department",
+}
+
+
 @dataclass(frozen=True)
 class Packet:
     timestamp: datetime
@@ -22,7 +27,10 @@ class Packet:
 
 def read_packets(path, timezone):
     with path.open(encoding="utf-8-sig", newline="") as stream:
-        for row_number, row in enumerate(csv.DictReader(stream), 2):
+        reader = csv.DictReader(stream)
+        if not PACKET_COLUMNS.issubset(reader.fieldnames or ()):
+            raise ValueError("CSV не содержит обязательные столбцы пакета")
+        for row_number, row in enumerate(reader, 2):
             try:
                 timestamp = datetime.fromisoformat(row["timestamp"])
                 if timestamp.tzinfo is None:
@@ -63,6 +71,12 @@ def instant(seconds):
     return datetime.fromtimestamp(seconds, UTC).isoformat()
 
 
+def pps_kind(sources, threshold, min_sources):
+    if sources.total() < threshold:
+        return None
+    return "SUSPECTED_DDOS" if len(sources) >= min_sources else "PPS_SPIKE"
+
+
 class NetworkTrafficAnalyzer:
     def __init__(self, pps_threshold=1000, min_sources=10, consecutive_seconds=2,
                  timezone="Asia/Vladivostok", internal_networks=("192.168.1.0/24",)):
@@ -87,8 +101,8 @@ class NetworkTrafficAnalyzer:
         active = None
         for (destination, second), sources in sorted(window.items()):
             pps = sources.total()
-            kind = "SUSPECTED_DDOS" if len(sources) >= self.min_sources else "PPS_SPIKE"
-            if pps < self.pps_threshold:
+            kind = pps_kind(sources, self.pps_threshold, self.min_sources)
+            if kind is None:
                 continue
             if active and (active["destination"], active["kind"], active["last_second"]) == (
                 destination, kind, second - 1

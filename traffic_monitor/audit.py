@@ -12,11 +12,14 @@ ZERO = "0" * 64
 
 
 class AuditJournal:
-    def __init__(self, path, key):
+    def __init__(self, path, key, *, read_only=False):
         if len(key) < 32:
             raise ValueError("AUDIT_KEY_HEX должен содержать не менее 32 байт")
         self.path = path
         self.key = key
+        self.read_only = read_only
+        if read_only:
+            return
         with self.connection() as connection:
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS audit (
@@ -29,7 +32,8 @@ class AuditJournal:
 
     @contextmanager
     def connection(self):
-        connection = sqlite3.connect(self.path, timeout=10)
+        target = self.path.resolve().as_uri() + "?mode=ro" if self.read_only else self.path
+        connection = sqlite3.connect(target, timeout=10, uri=self.read_only)
         try:
             with connection:
                 yield connection
